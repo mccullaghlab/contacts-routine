@@ -2,8 +2,11 @@ import itertools
 
 import click
 import numpy as np
-import mdtraj as md
+import MDAnalysis
+from MDAnalysis.lib.distances import calc_bonds
 from tqdm import tqdm
+
+from trajectory_files import trajectory_files
 
 
 @click.command(
@@ -15,14 +18,14 @@ from tqdm import tqdm
     '-f',
     'trajfile',
     type=click.Path(exists=True),
-    help='Path to trajectory file (.xtc) or folder containing .xtc files',
+    help='Path to any trajectory file supported by MDAnalysis',
 )
 @click.option(
     '--trajectory-list',
     '--traj-list',
     'trajlist',
     type=click.Path(exists=True),
-    help='Path to folder containing .xtc files OR file with list of trajectory paths',
+    help='Path to a trajectory folder OR file containing trajectory paths',
 )
 @click.option(
     '--topology',
@@ -48,27 +51,7 @@ from tqdm import tqdm
     help='Path to output file',
 )
 def main(trajfile, trajlist, topfile, ndxfile, output):
-    import os
-    import glob
-    
-    # Get list of trajectory files
-    if trajlist:
-        # Check if it's a directory or a file
-        if os.path.isdir(trajlist):
-            # It's a folder - get all .xtc files
-            traj_files = sorted(glob.glob(os.path.join(trajlist, '*.xtc')))
-            if not traj_files:
-                raise click.UsageError(f"No .xtc files found in folder: {trajlist}")
-        else:
-            # It's a file with list of trajectories
-            with open(trajlist, 'r') as f:
-                traj_files = [line.strip() for line in f if line.strip()]
-    elif trajfile:
-        traj_files = [trajfile]
-    else:
-        raise click.UsageError(
-            "Either --trajectory or --trajectory-list must be provided"
-        )
+    traj_files = trajectory_files(trajfile, trajlist)
     
     print(f"Processing {len(traj_files)} trajectory file(s)")
     if len(traj_files) <= 10:
@@ -82,8 +65,8 @@ def main(trajfile, trajlist, topfile, ndxfile, output):
     # load files
     index_pairs = np.loadtxt(ndxfile, dtype=int)
     # Validate residue numbering
-    top = md.load(topfile).topology
-    pdb_resids = sorted(set([res.resSeq for res in top.residues]))
+    universe = MDAnalysis.Universe(topfile, traj_files[0])
+    pdb_resids = sorted(set(universe.residues.resids))
 
     # Check for negative residues
     if any(r < 0 for r in pdb_resids):
@@ -91,25 +74,19 @@ def main(trajfile, trajlist, topfile, ndxfile, output):
             f"PDB contains negative residue indices. Please renumber starting from 1."
         )
 
-    # Check if indices are sequential (required for mdtraj)
-    if pdb_resids != list(range(min(pdb_resids), max(pdb_resids) + 1)):
-        raise click.UsageError(
-            "PDB has non-sequential residue numbering. This script requires "
-            "sequential numbering (e.g., 1,2,3,... with no gaps). "
-            "Please renumber your PDB, e.g. with: gmx editconf -f in.pdb -o out.pdb -resnr 1"
-        )
-
-
     # convert residue indices to heavy atoms
-    resseq_to_mdtraj = {res.resSeq: res.index for res in top.residues}
-
     atoms_per_res = {
-        index: [
-            atom.index for atom in top.residue(resseq_to_mdtraj[index]).atoms
-            if atom.element.symbol != 'H'
-        ]
+        index: universe.select_atoms(
+            f'resid {index} and not (type H or name H*)'
+        ).indices.tolist()
         for index in np.unique(index_pairs)
     }
+
+    missing_resids = [resid for resid, atoms in atoms_per_res.items() if not atoms]
+    if missing_resids:
+        raise click.UsageError(
+            f"Index file contains residue IDs with no heavy atoms: {missing_resids}"
+        )
 
     atom_pairs = [
         list(
@@ -147,21 +124,17 @@ def main(trajfile, trajlist, topfile, ndxfile, output):
                 )
 
 
-def load_xtc(trajfile, topfile):
-    top = md.load_topology(topfile)
-    with md.open(trajfile) as xtc:
-        while (
-            frame := xtc.read_as_traj(top, n_frames=1)
-        ).n_frames:
-            yield frame
-
-
 def compute_distances(trajfile, topfile, atom_pairs):
-    for frame in tqdm(load_xtc(trajfile, topfile), desc=f"Processing {trajfile}"):
-        yield md.compute_distances(
-            frame,
-            atom_pairs=atom_pairs,
-        )[0].flatten()
+    universe = MDAnalysis.Universe(topfile, trajfile)
+    first_atoms = universe.atoms[atom_pairs[:, 0]]
+    second_atoms = universe.atoms[atom_pairs[:, 1]]
+    for _ in tqdm(universe.trajectory, desc=f"Processing {trajfile}"):
+        # MDAnalysis reports Angstrom; the pipeline's distance files use nm.
+        yield calc_bonds(
+            first_atoms.positions,
+            second_atoms.positions,
+            box=universe.dimensions,
+        ) / 10.0
 
 
 if __name__ == '__main__':

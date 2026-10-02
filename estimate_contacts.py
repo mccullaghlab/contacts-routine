@@ -7,6 +7,9 @@ import numpy as np
 from MDAnalysis.lib.distances import capped_distance, distance_array
 from tqdm import tqdm
 import warnings
+
+from trajectory_files import trajectory_files
+
 warnings.filterwarnings('ignore', category=UserWarning, module='MDAnalysis')
 
 CUTOFF = 4.5  # [AA]
@@ -21,14 +24,14 @@ CUTOFF = 4.5  # [AA]
     '-f',
     'trajfile',
     type=click.Path(exists=True),
-    help='Path to trajectory file (.xtc) or folder containing .xtc files',
+    help='Path to any trajectory file supported by MDAnalysis',
 )
 @click.option(
     '--trajectory-list',
     '--traj-list',
     'trajlist',
     type=click.Path(exists=True),
-    help='Path to folder containing .xtc files OR file with list of trajectory paths',
+    help='Path to a trajectory folder OR file containing trajectory paths',
 )
 @click.option(
     '--top',
@@ -75,27 +78,7 @@ CUTOFF = 4.5  # [AA]
     help='Print detailed progress information',
 )
 def main(trajfile, trajlist, topfile, ndxfile, output, count_hydrogen, mode, verbose):
-    import os
-    import glob
-    
-    # Get list of trajectory files
-    if trajlist:
-        # Check if it's a directory or a file
-        if os.path.isdir(trajlist):
-            # It's a folder - get all .xtc files
-            traj_files = sorted(glob.glob(os.path.join(trajlist, '*.xtc')))
-            if not traj_files:
-                raise click.UsageError(f"No .xtc files found in folder: {trajlist}")
-        else:
-            # It's a file with list of trajectories
-            with open(trajlist, 'r') as f:
-                traj_files = [line.strip() for line in f if line.strip()]
-    elif trajfile:
-        traj_files = [trajfile]
-    else:
-        raise click.UsageError(
-            "Either --traj or --trajectory-list must be provided"
-        )
+    traj_files = trajectory_files(trajfile, trajlist)
     if verbose:
         print(f"Processing {len(traj_files)} trajectory file(s)")
         if len(traj_files) <= 10:

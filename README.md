@@ -19,30 +19,31 @@ The entry point for the full pipeline is `run_contacts_routine.sh`.
 
 ## Requirements
 
-- Python with: `MDAnalysis`, `mdtraj`, `msmhelper`, `numpy`, `click`, `tqdm`, `prettypyplot`, `matplotlib`
-- Trajectory files in `.xtc` format
+- Python with: `MDAnalysis`, `msmhelper`, `numpy`, `click`, `tqdm`, `prettypyplot`, `matplotlib`
+- Trajectory files in any coordinate format supported by the installed version of MDAnalysis
 - A topology file (`.pdb` or `.tpr`)
 - An index file (`.ndx`) listing residue pairs to analyze (1-indexed, shape `(n, 2)`, where n is the number of residue pairs)
-- PDB residue numbering must be positive and sequential with no gaps (required by `mdtraj`)
+- Residue IDs must be positive and must match the IDs in the index file
 
 ---
 
 ## Usage
 
 ```bash
-./run_contacts_routine.sh PARAM1 PARAM2 PARAM3 PARAM4 PARAM5 PARAM6 PARAM7 PARAM8
+./run_contacts_routine.sh -traj TRAJECTORY -pdb TOPOLOGY -min MIN_THR \
+  -max MAX_THR -ndx INDEX -sys SYSTEM -traj_mode TRAJ_MODE -mode MODE
 ```
 
-| Parameter | Description |
+| Option | Description |
 |-----------|-------------|
-| `PARAM1` | `.xtc` trajectory file **or** path to folder containing `.xtc` files |
-| `PARAM2` | Topology file (`.pdb`) |
-| `PARAM3` | Minimum contact frequency threshold (0–1), e.g. `0.1` |
-| `PARAM4` | Maximum contact frequency threshold (0–1), e.g. `0.9` |
-| `PARAM5` | Index file (`.ndx`) of residue pairs |
-| `PARAM6` | Base name for the system (used for output file names) |
-| `PARAM7` | Trajectory mode: `single` or `multi` |
-| `PARAM8` | Threshold mode: `overall` or `per-trajectory` |
+| `-traj` | MDAnalysis-supported trajectory file **or** path to a folder of supported trajectory files |
+| `-pdb` | Topology file (`.pdb`) |
+| `-min` | Minimum contact frequency threshold (0–1), e.g. `0.1` |
+| `-max` | Maximum contact frequency threshold (0–1), e.g. `0.9` |
+| `-ndx` | Index file (`.ndx`) of residue pairs |
+| `-sys` | Base name for the system (used for output file names) |
+| `-traj_mode` | Trajectory mode: `single` or `multi` |
+| `-mode` | Threshold mode: `overall` or `per-trajectory` |
 
 ### Threshold window
 
@@ -61,30 +62,35 @@ Contacts are selected if their formation frequency falls between `MIN_THR` and `
 
 **Single trajectory:**
 ```bash
-./run_contacts_routine.sh traj.xtc system.pdb 0.1 0.9 indices.ndx my_system single overall
+./run_contacts_routine.sh -traj traj.dcd -pdb system.pdb -min 0.1 -max 0.9 -ndx indices.ndx -sys my_system -traj_mode single -mode overall
 ```
 
 **Multiple trajectories — overall threshold:**
 ```bash
-./run_contacts_routine.sh /path/to/traj_folder system.pdb 0.1 0.9 indices.ndx my_system multi overall
+./run_contacts_routine.sh -traj /path/to/traj_folder -pdb system.pdb -min 0.1 -max 0.9 -ndx indices.ndx -sys my_system -traj_mode multi -mode overall
 ```
 
 **Multiple trajectories — per-trajectory threshold:**
 ```bash
-./run_contacts_routine.sh /path/to/traj_folder system.pdb 0.1 0.9 indices.ndx my_system multi per-trajectory
+./run_contacts_routine.sh -traj /path/to/traj_folder -pdb system.pdb -min 0.1 -max 0.9 -ndx indices.ndx -sys my_system -traj_mode multi -mode per-trajectory
 ```
 
 **For our HP35 benchmark example:**
 ```bash
-./run_contacts_routine.sh traj.xtc system.pdb 0.3 1.0 indices.ndx HP35 single overall
+./run_contacts_routine.sh -traj traj.xtc -pdb system.pdb -min 0.3 -max 1.0 -ndx indices.ndx -sys HP35 -traj_mode single -mode overall
 ```
 
-When using `multi` mode, the folder should contain `.xtc` files named e.g.:
+When using `multi` mode, supported formats may be mixed in one folder, e.g.:
 ```
 /path/to/traj_folder/traj1.xtc
-/path/to/traj_folder/traj2.xtc
-/path/to/traj_folder/traj3.xtc
+/path/to/traj_folder/traj2.dcd
+/path/to/traj_folder/traj3.trr
 ```
+
+The available formats are determined at runtime from the reader registry in the
+installed MDAnalysis version rather than from a fixed extension list. Unsupported
+files in a trajectory folder are ignored. The Python entry points also accept a
+text file containing one trajectory path per line via `--trajectory-list`.
 
 ---
 
@@ -117,12 +123,10 @@ Reads the contact fractions from step 1 and writes an index file containing only
 
 ### Step 3 — `contacts.py`
 
-Uses `mdtraj` to compute distances between all heavy-atom pairs within each selected residue pair. Outputs a large distance matrix (one row per frame) and an atom index file.
-
-Validates that PDB residue numbering is positive and fully sequential (no gaps), as `mdtraj` indexes residues by position. If your PDB has non-sequential numbering, renumber it first, e.g.:
-```bash
-gmx editconf -f in.pdb -o out.pdb -resnr 1
-```
+Uses `MDAnalysis` to compute distances between all heavy-atom pairs within each
+selected residue pair. Outputs a large distance matrix (one row per frame) in nm
+and an atom index file. Because residues are selected by their topology IDs,
+non-sequential residue numbering is supported.
 
 ### Step 4 — `extract_contacts.py`
 
@@ -134,4 +138,5 @@ For each residue pair, identifies atom pairs that individually form contacts (di
 
 - Index files are **1-indexed** throughout.
 - Hydrogen atoms are excluded from distance calculations by default.
+- `-traj` is the preferred shell option; the former `-xtc` spelling remains as a backward-compatible alias.
 - The cutoff used in step 1 (`estimate_contacts.py`) is **4.5 Å**; the cutoff in step 4 (`extract_contacts.py`) is **0.45 nm** — these are equivalent.
